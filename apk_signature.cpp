@@ -113,35 +113,64 @@ static bool get_real_apk_path(char *out_path) {
     xor_decrypt(path, sizeof(path) - 1);
 
     int fd = svc_openat(-100, (char *)path, O_RDONLY, 0);
+
+    std::memset(path, 0, sizeof(path));
+
     if (fd < 0) return false;
 
     char buf[1024], line[512];
     int ptr = 0;
     bool found = false;
+    bool skip_until_newline = false;
 
     long n;
     while ((n = svc_read(fd, buf, sizeof(buf))) > 0) {
         for (int i = 0; i < n; i++) {
-            if (buf[i] == '\n' || ptr >= 511) {
+            char c = buf[i];
+
+            if (skip_until_newline) {
+                if (c == '\n') {
+                    skip_until_newline = false;
+                }
+                continue;
+            }
+
+            if (c == '\n') {
                 line[ptr] = '\0';
-                if (strstr(line, " r-xp ") && strstr(line, "/base.apk")) {
-                    char *p = strchr(line, '/');
+                ptr = 0;
+
+                if (std::strstr(line, "/base.apk")) {
+                    char *p = std::strchr(line, '/');
                     if (p) {
-                        size_t len = strlen(p);
-                        memcpy(out_path, p, len);
+
+                        size_t len = std::strcspn(p, " \t\r\n");
+
+                        if (len >= sizeof(line))
+                            len = sizeof(line) - 1;
+
+                        std::memcpy(out_path, p, len);
                         out_path[len] = '\0';
-                        found = true;
-                        goto end;
+
+                        int test_fd = svc_openat(-100, out_path, O_RDONLY, 0);
+                        if (test_fd >= 0) {
+                            svc_close(test_fd);
+                            found = true;
+                            goto end;
+                        }
                     }
                 }
-                ptr = 0;
             } else {
-                line[ptr++] = buf[i];
+                if (ptr >= sizeof(line) - 1) {
+                    ptr = 0;
+                    skip_until_newline = true;
+                    continue;
+                }
+                line[ptr++] = c;
             }
         }
     }
 
-end:
+    end:
     svc_close(fd);
     return found;
 }
